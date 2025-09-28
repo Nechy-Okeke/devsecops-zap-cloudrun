@@ -1,0 +1,130 @@
+# .github/workflows/main.yml
+
+name: DevSecOps ZAP Pipeline (Build, Deploy, Scan)
+
+on:
+  push:
+    branches:
+      - main # Pipeline runs whenever code is pushed to the main branch
+
+env:
+  AWS_REGION: us-east-1 # !! IMPORTANT: Change this to your preferred AWS region (e.g., eu-central-1)
+  ECR_REPOSITORY: devsecops-zap-app-repo
+  CFN_STACK_NAME: DevSecOpsZapStack
+  
+# Give the GitHub runner permission to write the ID token (required for OIDC)
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # ----------------------------------------------------------------------------------
+  # 1. BUILD Stage: Build Docker image and push to ECR
+  # ----------------------------------------------------------------------------------
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          # These secrets must be configured in your GitHub repository settings!
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and Push Docker Image
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }} # Use Git SHA as the unique tag
+        run: |
+          # Build the Docker image from the app/ directory
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ./app
+          # Push the image to ECR
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          
+          # Set the output variable for the next job
+          echo "ECR_IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_ENV
+          echo "ecr_image_uri=${{ env.ECR_IMAGE_URI }}" >> $GITHUB_OUTPUT
+
+    outputs:
+      ecr_image_uri: ${{ env.ECR_IMAGE_URI }}
+
+  # ----------------------------------------------------------------------------------
+  # 2. DEPLOY Stage: Deploy infrastructure via CloudFormation (AWS App Runner)
+  # ----------------------------------------------------------------------------------
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build # Depends on the build job finishing successfully
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy/Update CloudFormation Stack
+        uses: aws-actions/aws-cloudformation-deploy@v1
+        id: stack-deploy
+        with:
+          name: ${{ env.CFN_STACK_NAME }}
+          template: infra/cloudformation/apprunner-template.yaml
+          # Pass the dynamic ECR Image URI to the CloudFormation template
+          parameter-overrides: |
+            EcrImageUri=${{ needs.build.outputs.ecr_image_uri }}
+          capabilities: CAPABILITY_NAMED_IAM 
+
+    outputs:
+      # Extract the live ServiceUrl from CloudFormation outputs for the ZAP scan
+      service_url: ${{ steps.stack-deploy.outputs.ServiceUrl }}
+
+  # ----------------------------------------------------------------------------------
+  # 3. SCAN Stage: Run OWASP ZAP Dynamic Application Security Testing (DAST)
+  # ----------------------------------------------------------------------------------
+  scan:
+    runs-on: ubuntu-latest
+    needs: deploy # Depends on the deployment finishing successfully
+    
+    # Wait for a short time after deployment to ensure App Runner is fully healthy
+    timeout-minutes: 10 
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        
+      - name: Setup ZAP Reports Directory
+        run: mkdir -p zap-reports
+
+      # OWASP ZAP Tool: Use the official ZAP action for Dynamic Scan
+      - name: OWASP ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          # The URL of the deployed App Runner service
+          target: ${{ needs.deploy.outputs.service_url }}
+          # The configuration file we created earlier
+          config_file: zap-config/zap-baseline.conf
+          # Set the ZAP failure criteria (High risk should fail the build)
+          fail_action: true 
+          # Output directory for the reports
+          # Note: ZAP reports are saved in the mounted working directory: /home/runner/work/devsecops-zap-cloudrun/devsecops-zap-cloudrun/zap-reports/
+          # The ZAP action saves the HTML report in the root of the working directory by default.
+          
+      # Upload ZAP reports as pipeline artifacts (industry best practice)
+      - name: Upload ZAP Report Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZAP-DAST-Report
+          # The ZAP action puts the report.html in the repository root by default
+          path: zap_report.html 
+          retention-days: 7
