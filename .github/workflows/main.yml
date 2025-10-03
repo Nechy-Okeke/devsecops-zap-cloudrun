@@ -78,40 +78,40 @@ jobs:
         if: steps.check-service.outputs.EXISTS == 'false'
         id: create-service
         run: |
-          # This command will stop the workflow if it fails and print the AWS error
+          # Corrected: Switched all internal JSON keys to PascalCase (e.g., ImageRepository)
           aws apprunner create-service \
             --service-name ${{ env.APP_RUNNER_SERVICE_NAME }} \
             --source-configuration '{
-              "imageRepository": {
-                "imageIdentifier": "${{ env.ECR_IMAGE_URI }}",
-                "imageRepositoryType": "ECR",
-                "imageConfiguration": {
-                  "port": "8080",
-                  "runtimeEnvironmentVariables": {
+              "ImageRepository": {
+                "ImageIdentifier": "${{ env.ECR_IMAGE_URI }}",
+                "ImageRepositoryType": "ECR",
+                "ImageConfiguration": {
+                  "Port": "8080",
+                  "RuntimeEnvironmentVariables": {
                       "NODE_ENV": "production"
                   }
                 }
               },
-              "autoDeploymentsEnabled": false,
-              "authenticationConfiguration": {
-                "accessRoleArn": "${{ env.REPO_ACCESS_ARN }}"
+              "AutoDeploymentsEnabled": false,
+              "AuthenticationConfiguration": {
+                "AccessRoleArn": "${{ env.REPO_ACCESS_ARN }}"
               }
             }' \
-            --instance-configuration '{"cpu": "1024", "memory": "2048"}' \
-            --health-check-configuration '{"protocol": "HTTP", "path": "/health", "interval": 10, "timeout": 5, "healthyThreshold": 2, "unhealthyThreshold": 5}'
+            --instance-configuration '{"Cpu": "1024", "Memory": "2048"}' \
+            --health-check-configuration '{"Protocol": "HTTP", "Path": "/health", "Interval": 10, "Timeout": 5, "HealthyThreshold": 2, "UnhealthyThreshold": 5}'
           
       - name: Update App Runner Service (if it exists)
         if: steps.check-service.outputs.EXISTS == 'true'
         id: update-service
         run: |
-          # This command will stop the workflow if it fails and print the AWS error
+          # Corrected: Switched all internal JSON keys to PascalCase (e.g., ImageIdentifier)
           aws apprunner update-service \
             --service-id ${{ env.APP_RUNNER_SERVICE_NAME }} \
             --image-repository '{
-              "imageIdentifier": "${{ env.ECR_IMAGE_URI }}",
-              "imageRepositoryType": "ECR",
-              "imageConfiguration": {
-                "port": "8080"
+              "ImageIdentifier": "${{ env.ECR_IMAGE_URI }}",
+              "ImageRepositoryType": "ECR",
+              "ImageConfiguration": {
+                "Port": "8080"
               }
             }'
 
@@ -119,7 +119,7 @@ jobs:
       - name: Wait for Deployment Completion and Get URL
         id: get-url
         run: |
-          # Get the ARN using describe-service (less reliable than list-services, but more direct)
+          # We use describe-service here, which requires the service to exist and the IAM user to have permissions
           SERVICE_ARN=$(aws apprunner describe-service --service-id ${{ env.APP_RUNNER_SERVICE_NAME }} --output json | jq -r .Service.ServiceArn)
           
           # CRITICAL CHECK: Ensure the ARN was found before attempting to wait/describe
