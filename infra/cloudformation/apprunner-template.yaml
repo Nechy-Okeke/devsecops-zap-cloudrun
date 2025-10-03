@@ -2,23 +2,18 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: AWS App Runner Service for DevSecOps Project with ECR, IAM, and CloudWatch Alarms
 
 Parameters:
-  # This Parameter is essential. It receives the ECR Image URI 
-  # dynamically from the GitHub Actions build job output.
   EcrImageUri:
     Type: String
     Description: URI of the ECR image pushed by the build stage (e.g., <account_id>.dkr.ecr.<region>.amazonaws.com/repo-name:tag)
 
 Resources:
-  # 0. ECR Repository (NEW RESOURCE ADDED: Fixes the 'name unknown' error)
   AppRepository:
     Type: AWS::ECR::Repository
     Properties:
-      RepositoryName: devsecops-zap-app-repo # MUST match the pipeline's expectation
+      RepositoryName: devsecops-zap-app-repo
       ImageScanningConfiguration:
         scanOnPush: true
 
-  # 1. IAM Role for App Runner to pull images from ECR
-  # NOTE: The Service Principal must be 'build.apprunner.amazonaws.com' for deployment access.
   AppRunnerAccessRole:
     Type: AWS::IAM::Role
     Properties:
@@ -27,51 +22,41 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              Service: [ 'build.apprunner.amazonaws.com' ] 
-            Action:
-              - sts:AssumeRole
+              Service: [ 'build.apprunner.amazonaws.com' ]
+            Action: sts:AssumeRole
       ManagedPolicyArns:
-        # Standard AWS policy for ECR access
         - arn:aws:iam::aws:policy/service-role/AWSAppRunnerServicePolicyForECR
       Path: /
       RoleName: devsecops-AppRunnerAccessRole
 
-  # 2. AWS App Runner Service 
   AppRunnerService:
     Type: AWS::AppRunner::Service
     Properties:
-      ServiceName: devsecops-zap-app 
-      # Added Description to ensure the stack is always updatable on subsequent runs.
+      ServiceName: devsecops-zap-app
       Description: Latest deployment for DevSecOps pipeline
       SourceConfiguration:
         ImageRepository:
-          # Uses the Parameter passed by the GitHub Action
-          ImageIdentifier: !Ref EcrImageUri 
-          ImageRepositoryType: ECR 
+          ImageIdentifier: !Ref EcrImageUri
+          ImageRepositoryType: ECR
           ImageConfiguration:
-            Port: '8080' 
+            Port: '8080'
             RuntimeEnvironmentVariables:
               NODE_ENV: production
         AuthenticationConfiguration:
-          # Uses the IAM Role defined above
           AccessRoleArn: !GetAtt AppRunnerAccessRole.Arn
-      
       InstanceConfiguration:
-        Cpu: '1024' # 1 vCPU
-        Memory: '2048' # 2 GB
-        
+        Cpu: '1024'
+        Memory: '2048'
       HealthCheckConfiguration:
-        Path: /health # Ensure this matches your server.js
+        Path: /health
         Protocol: HTTP
         Interval: 10
         Timeout: 5
         HealthyThreshold: 1
         UnhealthyThreshold: 5
-        
       ObservabilityConfiguration:
-        ObservabilityEnabled: true 
+        ObservabilityEnabled: true
 
-  # 3. CloudWatch Alarm for High CPU Usage (Best Practice Monitoring)
   AppRunnerHighCpuAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -79,7 +64,7 @@ Resources:
       AlarmDescription: "Alarm triggered if App Runner CPU utilization exceeds 80% for 3 minutes"
       ComparisonOperator: GreaterThanThreshold
       EvaluationPeriods: 3
-      Period: 60 
+      Period: 60
       Statistic: Average
       Threshold: 80
       Namespace: AWS/AppRunner
@@ -88,7 +73,6 @@ Resources:
         - Name: ServiceId
           Value: !GetAtt AppRunnerService.ServiceId
 
-  # 4. CloudWatch Alarm for Service Errors (Best Practice Monitoring)
   AppRunnerServerErrorAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -96,15 +80,14 @@ Resources:
       AlarmDescription: "Alarm triggered if 5xx HTTP errors occur."
       ComparisonOperator: GreaterThanThreshold
       EvaluationPeriods: 1
-      Period: 300 
+      Period: 300
       Statistic: Sum
-      Threshold: 1 
+      Threshold: 1
       Namespace: AWS/AppRunner
       MetricName: 5xxResponse
       Dimensions:
         - Name: ServiceId
           Value: !GetAtt AppRunnerService.ServiceId
-
 
 Outputs:
   ServiceUrl:
