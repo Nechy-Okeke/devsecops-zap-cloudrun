@@ -6,12 +6,14 @@ on:
     branches:
       - main
 
-# Define global environment variables if needed
+# Define global environment variables
 env:
   AWS_REGION: us-east-1
   ECR_REPOSITORY: devsecops-zap-app-repo
   APP_RUNNER_SERVICE_NAME: devsecops-zap-app
   AWS_ACCOUNT_ID: 879381264902 # Your specific AWS Account ID
+  # Define the ARN here where the global env variables are available
+  REPO_ACCESS_ARN: arn:aws:iam::879381264902:role/devsecops-AppRunnerAccessRole
 
 jobs:
   build:
@@ -54,9 +56,8 @@ jobs:
     needs: [build]
     
     env:
+      # ECR_IMAGE_URI needs to remain in the job env block as it depends on the 'build' job's output
       ECR_IMAGE_URI: ${{ needs.build.outputs.ecr_uri }}
-      # ARN for the manually created role
-      REPO_ACCESS_ARN: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/devsecops-AppRunnerAccessRole
 
     steps:
       - name: Configure AWS Credentials
