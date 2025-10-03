@@ -62,8 +62,19 @@ jobs:
       - name: Get Service ARN (if exists)
         id: get-arn
         run: |
-          SERVICE_ARN=$(aws apprunner list-services --output json \
-            | jq -r '.ServiceSummaryList[] | select(.ServiceName=="'"${{ env.APP_RUNNER_SERVICE_NAME }}"'") | .ServiceArn')
+          SERVICE_ARN=""
+          RETRY=0
+          MAX_RETRIES=5
+          while [ -z "$SERVICE_ARN" ] && [ $RETRY -lt $MAX_RETRIES ]; do
+            SERVICE_ARN=$(aws apprunner list-services --output json \
+              | jq -r '.ServiceSummaryList[] | select(.ServiceName=="'"${APP_RUNNER_SERVICE_NAME}"'") | .ServiceArn')
+            if [ -z "$SERVICE_ARN" ]; then
+              RETRY=$((RETRY+1))
+              echo "Service ARN not found yet, retrying in $((RETRY*5)) seconds..."
+              sleep $((RETRY*5))
+            fi
+          done
+
           if [ -z "$SERVICE_ARN" ]; then
             echo "EXISTS=false" >> $GITHUB_OUTPUT
           else
@@ -87,10 +98,10 @@ jobs:
                   }
                 }
               },
-              "AutoDeploymentsEnabled": false,
               "AuthenticationConfiguration": {
                 "AccessRoleArn": "'"${{ env.REPO_ACCESS_ARN }}"'"
-              }
+              },
+              "AutoDeploymentsEnabled": false
             }' \
             --instance-configuration '{"Cpu":"1024","Memory":"2048"}' \
             --health-check-configuration '{"Protocol":"HTTP","Path":"/health","Interval":10,"Timeout":5,"HealthyThreshold":2,"UnhealthyThreshold":5}'
@@ -100,24 +111,45 @@ jobs:
         run: |
           aws apprunner update-service \
             --service-arn ${{ steps.get-arn.outputs.SERVICE_ARN }} \
-            --image-repository '{
-              "ImageIdentifier": "'"${{ env.ECR_IMAGE_URI }}"'",
-              "ImageRepositoryType": "ECR",
-              "ImageConfiguration": {"Port":"8080"}
+            --source-configuration '{
+              "ImageRepository": {
+                "ImageIdentifier": "'"${{ env.ECR_IMAGE_URI }}"'",
+                "ImageRepositoryType": "ECR",
+                "ImageConfiguration": {
+                  "Port": "8080",
+                  "RuntimeEnvironmentVariables": {
+                    "NODE_ENV": "production"
+                  }
+                }
+              },
+              "AuthenticationConfiguration": {
+                "AccessRoleArn": "'"${{ env.REPO_ACCESS_ARN }}"'"
+              },
+              "AutoDeploymentsEnabled": false
             }'
 
       - name: Wait for Deployment and Get URL
         id: get-url
         run: |
-          # Fetch ARN again in case it was just created
           SERVICE_ARN=$(aws apprunner list-services --output json \
             | jq -r '.ServiceSummaryList[] | select(.ServiceName=="'"${{ env.APP_RUNNER_SERVICE_NAME }}"'") | .ServiceArn')
+
           if [ -z "$SERVICE_ARN" ]; then
             echo "Error: App Runner service ARN not found."
             exit 1
           fi
 
+          echo "Waiting for App Runner service to reach RUNNING state..."
           aws apprunner wait service-running --service-arn "$SERVICE_ARN"
+
+          LATEST_OP_STATUS=$(aws apprunner describe-service --service-arn "$SERVICE_ARN" \
+            --query 'Service.LatestOperationState' --output text)
+
+          if [ "$LATEST_OP_STATUS" != "SUCCEEDED" ]; then
+            echo "Deployment failed! LatestOperationState=$LATEST_OP_STATUS"
+            aws apprunner describe-service --service-arn "$SERVICE_ARN"
+            exit 1
+          fi
 
           SERVICE_URL=$(aws apprunner describe-service --service-arn "$SERVICE_ARN" --output json | jq -r .Service.ServiceUrl)
           echo "SERVICE_URL=$SERVICE_URL" >> $GITHUB_OUTPUT
