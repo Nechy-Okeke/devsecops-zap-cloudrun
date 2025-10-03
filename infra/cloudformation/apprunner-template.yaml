@@ -20,9 +20,18 @@ Resources:
               Service: [ 'build.apprunner.amazonaws.com' ]
             Action:
               - sts:AssumeRole
-      ManagedPolicyArns:
-        # Standard AWS policy for ECR access
-        - arn:aws:iam::aws:policy/service-role/AWSAppRunnerServicePolicyForECR
+      Policies:
+        - PolicyName: ECRPullPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetAuthorizationToken
+                Resource: '*'
       Path: /
       RoleName: devsecops-AppRunnerAccessRole
 
