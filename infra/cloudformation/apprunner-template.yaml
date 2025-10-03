@@ -35,19 +35,20 @@ Resources:
       Path: /
       RoleName: devsecops-AppRunnerAccessRole
 
-  # 3. AWS App Runner Service (The serverless hosting environment)
+  # 2. AWS App Runner Service (The serverless hosting environment)
   AppRunnerService:
     Type: AWS::AppRunner::Service
     Properties:
       ServiceName: devsecops-zap-app
       SourceConfiguration:
         ImageRepository:
-          ImageIdentifier: !Ref EcrImageUri 
-          ImageRepositoryType: ECR 
+          ImageIdentifier: !Ref EcrImageUri
+          ImageRepositoryType: ECR
           ImageConfiguration:
             Port: '8080' # Must match the EXPOSE in Dockerfile and PORT in server.js
             RuntimeEnvironmentVariables:
-              NODE_ENV: production
+              - Name: NODE_ENV
+                Value: production
         AuthenticationConfiguration:
           AccessRoleArn: !GetAtt AppRunnerAccessRole.Arn
       
@@ -58,7 +59,7 @@ Resources:
       HealthCheckConfiguration:
         Path: /health # Matches the health endpoint in app/server.js
 
-  # 4. CloudWatch Alarm for High CPU Usage
+  # 3. CloudWatch Alarm for High CPU Usage
   AppRunnerHighCpuAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -76,7 +77,7 @@ Resources:
           Value: !GetAtt AppRunnerService.ServiceId
       # You can add AlarmActions (e.g., to an SNS Topic) here
 
-  # 5. CloudWatch Alarm for Service Errors (5xx HTTP responses)
+  # 4. CloudWatch Alarm for Service Errors (5xx HTTP responses)
   AppRunnerServerErrorAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -93,7 +94,6 @@ Resources:
         - Name: ServiceId
           Value: !GetAtt AppRunnerService.ServiceId
       # You can add AlarmActions (e.g., to an SNS Topic) here
-
 
 Outputs:
   ServiceUrl:
