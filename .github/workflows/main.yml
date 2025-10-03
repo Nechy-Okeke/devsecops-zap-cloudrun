@@ -122,11 +122,17 @@ jobs:
         run: |
           SERVICE_ARN=$(aws apprunner list-services --output json | jq -r '.ServiceSummaryList[] | select(.ServiceName=="${{ env.APP_RUNNER_SERVICE_NAME }}") | .ServiceArn')
           
+          # CRITICAL CHECK: Ensure the ARN was found before attempting to wait/describe
+          if [ -z "$SERVICE_ARN" ]; then
+              echo "Error: App Runner service ARN not found after create/update attempt. Deployment may have failed."
+              exit 1
+          fi
+
           # Wait until the service status is 'RUNNING' and latest operation status is 'SUCCEEDED'
-          aws apprunner wait service-running --service-arn $SERVICE_ARN
+          aws apprunner wait service-running --service-arn "$SERVICE_ARN"
           
           # Get the final URL
-          SERVICE_URL=$(aws apprunner describe-service --service-arn $SERVICE_ARN --output json | jq -r .Service.ServiceUrl)
+          SERVICE_URL=$(aws apprunner describe-service --service-arn "$SERVICE_ARN" --output json | jq -r .Service.ServiceUrl)
           echo "SERVICE_URL=$SERVICE_URL" >> $GITHUB_OUTPUT
 
     outputs:
