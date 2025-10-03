@@ -1,16 +1,14 @@
-# infra/cloudformation/apprunner-template.yaml
-
 AWSTemplateFormatVersion: '2010-09-09'
-Description: AWS App Runner Service for DevSecOps Project (Container Deployment)
+Description: AWS App Runner Service for DevSecOps Project with ECR, IAM, and CloudWatch Alarms
 
 Parameters:
-  # This parameter will be passed by the GitHub Actions pipeline during deployment
+  # This value is passed dynamically by the GitHub Actions pipeline
   EcrImageUri:
     Type: String
     Description: URI of the ECR image pushed by the build stage (e.g., <account_id>.dkr.ecr.<region>.amazonaws.com/repo-name:tag)
 
 Resources:
-  # 1. AWS ECR Repository to store the Docker image 
+  # 1. AWS ECR Repository (Container Registry)
   AppEcrRepository:
     Type: AWS::ECR::Repository
     Properties:
@@ -18,7 +16,7 @@ Resources:
       ImageScanningConfiguration:
         ScanOnPush: true 
 
-  # 2. IAM Role for App Runner to securely pull images from ECR
+  # 2. IAM Role for App Runner to pull images from ECR
   AppRunnerAccessRole:
     Type: AWS::IAM::Role
     Properties:
@@ -31,28 +29,70 @@ Resources:
             Action:
               - sts:AssumeRole
       ManagedPolicyArns:
+        # Standard AWS policy for ECR access
         - arn:aws:iam::aws:policy/service-role/AWSAppRunnerServicePolicyForECR
       Path: /
       RoleName: devsecops-AppRunnerAccessRole
 
-  # 3. AWS App Runner Service to deploy the container
+  # 3. AWS App Runner Service (The serverless hosting environment)
   AppRunnerService:
     Type: AWS::AppRunner::Service
     Properties:
       ServiceName: devsecops-zap-app
       SourceConfiguration:
         ImageRepository:
-          ImageIdentifier: !Ref EcrImageUri # The Image URI passed as a parameter
+          ImageIdentifier: !Ref EcrImageUri 
           ImageRepositoryType: ECR 
           ImageConfiguration:
-            Port: '8080' # Must match the EXPOSE port in your app/Dockerfile
+            Port: '8080' # Must match the EXPOSE in Dockerfile and PORT in server.js
             RuntimeEnvironmentVariables:
               NODE_ENV: production
         AuthenticationConfiguration:
           AccessRoleArn: !GetAtt AppRunnerAccessRole.Arn
       
+      InstanceConfiguration:
+        Cpu: '1024' # 1 vCPU
+        Memory: '2048' # 2 GB
+        
       HealthCheckConfiguration:
         Path: /health # Matches the health endpoint in app/server.js
+
+  # 4. CloudWatch Alarm for High CPU Usage
+  AppRunnerHighCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: devsecops-High-CPU-Usage
+      AlarmDescription: "Alarm triggered if App Runner CPU utilization exceeds 80% for 3 minutes"
+      ComparisonOperator: GreaterThanThreshold
+      EvaluationPeriods: 3
+      Period: 60 # 1 minute period
+      Statistic: Average
+      Threshold: 80
+      Namespace: AWS/AppRunner
+      MetricName: CpuUtilization
+      Dimensions:
+        - Name: ServiceId
+          Value: !GetAtt AppRunnerService.ServiceId
+      # You can add AlarmActions (e.g., to an SNS Topic) here
+
+  # 5. CloudWatch Alarm for Service Errors (5xx HTTP responses)
+  AppRunnerServerErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: devsecops-Server-Error-Rate
+      AlarmDescription: "Alarm triggered if 5xx HTTP errors occur."
+      ComparisonOperator: GreaterThanThreshold
+      EvaluationPeriods: 1
+      Period: 300 # 5 minute period
+      Statistic: Sum
+      Threshold: 1 # Threshold of 1 or more 5xx errors in 5 minutes
+      Namespace: AWS/AppRunner
+      MetricName: 5xxResponse
+      Dimensions:
+        - Name: ServiceId
+          Value: !GetAtt AppRunnerService.ServiceId
+      # You can add AlarmActions (e.g., to an SNS Topic) here
+
 
 Outputs:
   ServiceUrl:
@@ -62,7 +102,7 @@ Outputs:
       Name: devsecops-ServiceUrl
 
   EcrRepositoryUri:
-    Description: ECR Repository URI (used by the pipeline)
+    Description: ECR Repository URI where the Docker image will be pushed
     Value: !GetAtt AppEcrRepository.RepositoryUri
     Export:
       Name: devsecops-EcrRepositoryUri
