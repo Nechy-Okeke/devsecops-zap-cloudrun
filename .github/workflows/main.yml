@@ -18,7 +18,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       # Export the full ECR URI with the unique commit SHA tag for the next job
-      # Note: We now generate the image-uri manually since the action output differs slightly
       ecr_uri: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
 
     steps:
@@ -32,7 +31,6 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # --- NEW STEP: Set up Docker BuildX (Required for modern Docker actions) ---
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         
@@ -41,7 +39,7 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # --- MODIFIED STEP: Use the standard Docker build/push action ---
+      # Use the standard Docker build/push action
       - name: Build and Push Docker Image
         uses: docker/build-push-action@v5
         with:
@@ -69,7 +67,8 @@ jobs:
 
       - name: Deploy App Runner Service (Direct Deployment)
         id: deploy-service
-        uses: aws-actions/apprunner@v1
+        # CRITICAL FIX: Use the correct, official action name for App Runner deployment
+        uses: aws-actions/configure-apprunner@v1
         with:
           service-name: ${{ env.APP_RUNNER_SERVICE_NAME }}
           image-uri: ${{ env.ECR_IMAGE_URI }}
@@ -95,6 +94,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # The scan job is still here! It just runs last.
       - name: Wait for App Runner to be ready
         run: |
           echo "Waiting 60 seconds for App Runner service to stabilize at ${{ env.APP_URL }}..."
