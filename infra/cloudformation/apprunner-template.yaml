@@ -8,15 +8,7 @@ Parameters:
     Description: URI of the ECR image pushed by the build stage (e.g., <account_id>.dkr.ecr.<region>.amazonaws.com/repo-name:tag)
 
 Resources:
-  # 1. AWS ECR Repository (Container Registry)
-  AppEcrRepository:
-    Type: AWS::ECR::Repository
-    Properties:
-      RepositoryName: devsecops-zap-app-repo
-      ImageScanningConfiguration:
-        ScanOnPush: true 
-
-  # 2. IAM Role for App Runner to pull images from ECR
+  # 1. IAM Role for App Runner to pull images from ECR
   AppRunnerAccessRole:
     Type: AWS::IAM::Role
     Properties:
@@ -100,9 +92,3 @@ Outputs:
     Value: !GetAtt AppRunnerService.ServiceUrl
     Export:
       Name: devsecops-ServiceUrl
-
-  EcrRepositoryUri:
-    Description: ECR Repository URI where the Docker image will be pushed
-    Value: !GetAtt AppEcrRepository.RepositoryUri
-    Export:
-      Name: devsecops-EcrRepositoryUri
