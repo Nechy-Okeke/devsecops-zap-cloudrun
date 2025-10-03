@@ -72,14 +72,13 @@ jobs:
         id: check-service
         run: |
           # Query the service list. If it succeeds, the service exists.
-          # Note: We rely on the `describe-service` command which fails (exit code 255) if service not found.
           aws apprunner describe-service --service-id ${{ env.APP_RUNNER_SERVICE_NAME }} 2>/dev/null && echo "EXISTS=true" >> $GITHUB_OUTPUT || echo "EXISTS=false" >> $GITHUB_OUTPUT
-        # Removed continue-on-error to ensure we detect IAM issues in this step
-
+        
       - name: Create App Runner Service (if it doesn't exist)
         if: steps.check-service.outputs.EXISTS == 'false'
         id: create-service
         run: |
+          # This command will stop the workflow if it fails and print the AWS error
           aws apprunner create-service \
             --service-name ${{ env.APP_RUNNER_SERVICE_NAME }} \
             --source-configuration '{
@@ -99,13 +98,13 @@ jobs:
               }
             }' \
             --instance-configuration '{"cpu": "1024", "memory": "2048"}' \
-            --health-check-configuration '{"protocol": "HTTP", "path": "/health", "interval": 10, "timeout": 5, "healthyThreshold": 2, "unhealthyThreshold": 5}' \
-            --output json | jq -r .Service.ServiceUrl > service_url.txt || exit 1 # Fails pipeline on AWS CLI error
+            --health-check-configuration '{"protocol": "HTTP", "path": "/health", "interval": 10, "timeout": 5, "healthyThreshold": 2, "unhealthyThreshold": 5}'
           
       - name: Update App Runner Service (if it exists)
         if: steps.check-service.outputs.EXISTS == 'true'
         id: update-service
         run: |
+          # This command will stop the workflow if it fails and print the AWS error
           aws apprunner update-service \
             --service-id ${{ env.APP_RUNNER_SERVICE_NAME }} \
             --image-repository '{
@@ -114,18 +113,18 @@ jobs:
               "imageConfiguration": {
                 "port": "8080"
               }
-            }' \
-            --output json | jq -r .Service.ServiceUrl > service_url.txt || exit 1 # Fails pipeline on AWS CLI error
+            }'
 
       # Wait for deployment to complete and extract the URL
       - name: Wait for Deployment Completion and Get URL
         id: get-url
         run: |
-          SERVICE_ARN=$(aws apprunner list-services --output json | jq -r '.ServiceSummaryList[] | select(.ServiceName=="${{ env.APP_RUNNER_SERVICE_NAME }}") | .ServiceArn')
+          # Get the ARN using describe-service (less reliable than list-services, but more direct)
+          SERVICE_ARN=$(aws apprunner describe-service --service-id ${{ env.APP_RUNNER_SERVICE_NAME }} --output json | jq -r .Service.ServiceArn)
           
           # CRITICAL CHECK: Ensure the ARN was found before attempting to wait/describe
           if [ -z "$SERVICE_ARN" ]; then
-              echo "Error: App Runner service ARN not found after create/update attempt. Please check AWS console logs for detailed failure reasons."
+              echo "Error: App Runner service ARN not found after create/update attempt. THIS IS A CRITICAL FAILURE. Please check AWS console for IAM Role or permissions errors on user: github-devsecops-apprunner-admin."
               exit 1
           fi
 
