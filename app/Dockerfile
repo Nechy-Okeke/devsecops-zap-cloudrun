@@ -2,9 +2,8 @@
 FROM node:20-alpine AS builder
 
 WORKDIR /app
-COPY package*.json ./
+COPY . .
 RUN npm install --production
-COPY server.js .   # ✅ Copy your app code into build stage
 
 # STAGE 2: Production Stage - Create the final lean image
 FROM node:20-alpine
@@ -12,8 +11,8 @@ WORKDIR /app
 
 # Copy installed dependencies and app code
 COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package*.json ./   # ✅ Fix: include package.json
-COPY --from=builder /app/server.js ./       # ✅ Fix: include server.js
+COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/server.js ./
 
 # IMPORTANT: Port 8080 must match the PORT in server.js
 EXPOSE 8080
