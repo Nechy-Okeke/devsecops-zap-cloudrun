@@ -1,130 +1,122 @@
-# .github/workflows/main.yml
+name: DevSecOps App Runner Pipeline
 
-name: DevSecOps ZAP Pipeline (Build, Deploy, Scan)
-
+# Triggers the workflow on pushes to the main branch
 on:
   push:
     branches:
-      - main # Pipeline runs whenever code is pushed to the main branch
+      - main
 
+# Define global environment variables if needed
 env:
-  AWS_REGION: us-east-1 # !! IMPORTANT: Change this to your preferred AWS region (e.g., eu-central-1)
+  AWS_REGION: us-east-1
   ECR_REPOSITORY: devsecops-zap-app-repo
-  CFN_STACK_NAME: DevSecOpsZapStack
-  
-# Give the GitHub runner permission to write the ID token (required for OIDC)
-permissions:
-  id-token: write
-  contents: read
+  APP_RUNNER_SERVICE_NAME: devsecops-zap-app
 
 jobs:
-  # ----------------------------------------------------------------------------------
-  # 1. BUILD Stage: Build Docker image and push to ECR
-  # ----------------------------------------------------------------------------------
   build:
+    name: Build and Push Docker Image
     runs-on: ubuntu-latest
+    outputs:
+      # Export the full ECR URI with the unique commit SHA tag for the next job
+      ecr_uri: ${{ steps.build-and-push.outputs.image-uri }}
+
     steps:
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          # These secrets must be configured in your GitHub repository settings!
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          # Using the confirmed secret name
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }} 
           aws-region: ${{ env.AWS_REGION }}
 
+      # Login to ECR
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and Push Docker Image
-        id: build-image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }} # Use Git SHA as the unique tag
-        run: |
-          # Build the Docker image from the app/ directory
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ./app
-          # Push the image to ECR
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          
-          # Set the output variable for the next job
-          echo "ECR_IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_ENV
-          echo "ecr_image_uri=${{ env.ECR_IMAGE_URI }}" >> $GITHUB_OUTPUT
+      # Build, Tag, and Push the image to ECR
+      - name: Build, Tag, and Push Docker Image
+        id: build-and-push
+        uses: aws-actions/build-and-push-action@v5
+        with:
+          context: ./app # Assuming Dockerfile and source code are in the 'app' directory
+          push: true
+          # Use the ECR login output, repository name, and tag the image with the short commit SHA
+          image_uri: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
 
-    outputs:
-      ecr_image_uri: ${{ env.ECR_IMAGE_URI }}
-
-  # ----------------------------------------------------------------------------------
-  # 2. DEPLOY Stage: Deploy infrastructure via CloudFormation (AWS App Runner)
-  # ----------------------------------------------------------------------------------
   deploy:
+    name: Deploy to App Runner
     runs-on: ubuntu-latest
-    needs: build # Depends on the build job finishing successfully
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+    needs: [build]
+    
+    # Environment variables specific to the deployment
+    env:
+      ECR_IMAGE_URI: ${{ needs.build.outputs.ecr_uri }}
+      AWS_ACCOUNT_ID: 879381264902 # Your specific AWS Account ID
 
+    steps:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          # Using the confirmed secret name
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }} 
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Deploy/Update CloudFormation Stack
-        uses: aws-actions/aws-cloudformation-github-deploy@v1
-        id: stack-deploy
+      - name: Deploy App Runner Service (Direct Deployment)
+        id: deploy-service
+        uses: aws-actions/apprunner@v1
         with:
-          name: ${{ env.CFN_STACK_NAME }}
-          template: infra/cloudformation/apprunner-template.yaml
-          # Pass the dynamic ECR Image URI to the CloudFormation template
-          parameter-overrides: |
-            EcrImageUri=${{ needs.build.outputs.ecr_image_uri }}
-          capabilities: CAPABILITY_NAMED_IAM
-
+          service-name: ${{ env.APP_RUNNER_SERVICE_NAME }}
+          # Use the ECR URI from the build job's output
+          image-uri: ${{ env.ECR_IMAGE_URI }}
+          # The manually created IAM role for App Runner to pull the image
+          image-repository-access-role-arn: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/devsecops-AppRunnerAccessRole
+          instance-cpu: 1024
+          instance-memory: 2048
+          port: 8080
+          health-check-path: /health
+          auto-deploy-enabled: false # Use CI/CD to control deployments
+          
     outputs:
-      # Extract the live ServiceUrl from CloudFormation outputs for the ZAP scan
-      service_url: ${{ steps.stack-deploy.outputs.ServiceUrl }}
+      # Pass the Service URL to the next job (scan)
+      service_url: ${{ steps.deploy-service.outputs.service-url }}
 
-  # ----------------------------------------------------------------------------------
-  # 3. SCAN Stage: Run OWASP ZAP Dynamic Application Security Testing (DAST)
-  # ----------------------------------------------------------------------------------
+
   scan:
+    name: Security Scan (DAST)
     runs-on: ubuntu-latest
-    needs: deploy # Depends on the deployment finishing successfully
+    needs: [deploy]
+    env:
+      APP_URL: ${{ needs.deploy.outputs.service_url }}
     
-    # Wait for a short time after deployment to ensure App Runner is fully healthy
-    timeout-minutes: 10 
-
     steps:
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v4
-        
-      - name: Setup ZAP Reports Directory
-        run: mkdir -p zap-reports
 
-      # OWASP ZAP Tool: Use the official ZAP action for Dynamic Scan
-      - name: OWASP ZAP Baseline Scan
+      - name: Wait for App Runner to be ready
+        # App Runner needs time to be healthy before the scan starts
+        run: |
+          echo "Waiting 60 seconds for App Runner service to stabilize at ${{ env.APP_URL }}..."
+          sleep 60
+
+      - name: Run ZAP Baseline Scan
         uses: zaproxy/action-baseline@v0.12.0
         with:
-          # The URL of the deployed App Runner service
-          target: ${{ needs.deploy.outputs.service_url }}
-          # The configuration file we created earlier
+          target: ${{ env.APP_URL }}
+          # The scan duration is set to 5 minutes (300 seconds)
+          max_time: 300
+          # Use the suppression file from your repository
           config_file: zap-config/zap-baseline.conf
-          # Set the ZAP failure criteria (High risk should fail the build)
-          fail_action: true 
-          # Output directory for the reports
-          # Note: ZAP reports are saved in the mounted working directory: /home/runner/work/devsecops-zap-cloudrun/devsecops-zap-cloudrun/zap-reports/
-          # The ZAP action saves the HTML report in the root of the working directory by default.
+          # Fail the build on any high-level alerts
+          fail_action: true
+          allow_issue_writing: false
           
-      # Upload ZAP reports as pipeline artifacts (industry best practice)
-      - name: Upload ZAP Report Artifact
+      - name: Upload ZAP Report
         uses: actions/upload-artifact@v4
         with:
-          name: ZAP-DAST-Report
-          # The ZAP action puts the report.html in the repository root by default
-          path: zap_report.html 
-          retention-days: 7
+          name: ZAP-Report-${{ github.sha }}
+          path: zap_report.html
