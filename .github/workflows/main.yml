@@ -75,7 +75,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Deploy/Update CloudFormation Stack
-        uses: aws-actions/aws-cloudformation-deploy@v1
+        uses: aws-actions/aws-cloudformation-deploy@v2
         id: stack-deploy
         with:
           name: ${{ env.CFN_STACK_NAME }}
