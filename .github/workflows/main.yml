@@ -79,6 +79,7 @@ jobs:
         id: create-service
         run: |
           # Corrected: Switched all internal JSON keys to PascalCase (e.g., ImageRepository)
+          # If this step fails due to IAM, it will now halt the workflow immediately with the AWS error message.
           aws apprunner create-service \
             --service-name ${{ env.APP_RUNNER_SERVICE_NAME }} \
             --source-configuration '{
@@ -119,16 +120,19 @@ jobs:
       - name: Wait for Deployment Completion and Get URL
         id: get-url
         run: |
-          # We use describe-service here, which requires the service to exist and the IAM user to have permissions
-          SERVICE_ARN=$(aws apprunner describe-service --service-id ${{ env.APP_RUNNER_SERVICE_NAME }} --output json | jq -r .Service.ServiceArn)
+          # Use list-services (more robust than describe-service) to get the ARN by name.
+          # This command returns an empty string if not found, preventing a shell error.
+          SERVICE_ARN=$(aws apprunner list-services --output json | jq -r '.ServiceSummaryList[] | select(.ServiceName=="${{ env.APP_RUNNER_SERVICE_NAME }}") | .ServiceArn')
           
           # CRITICAL CHECK: Ensure the ARN was found before attempting to wait/describe
           if [ -z "$SERVICE_ARN" ]; then
-              echo "Error: App Runner service ARN not found after create/update attempt. THIS IS A CRITICAL FAILURE. Please check AWS console for IAM Role or permissions errors on user: github-devsecops-apprunner-admin."
+              echo "Error: App Runner service ARN not found after create/update attempt."
+              echo "This usually indicates the 'Create Service' step failed due to permission/IAM issues (e.g., AccessRoleArn is wrong or missing permissions for the deployment user)."
               exit 1
           fi
 
           # Wait until the service status is 'RUNNING' and latest operation status is 'SUCCEEDED'
+          echo "Waiting for App Runner service to reach RUNNING state..."
           aws apprunner wait service-running --service-arn "$SERVICE_ARN"
           
           # Get the final URL
