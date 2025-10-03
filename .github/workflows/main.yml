@@ -75,7 +75,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Deploy/Update CloudFormation Stack
-        uses: aws-actions/aws-cloudformation-deploy@v2
+        uses: aws-actions/aws-cloudformation-github-deploy@v1
         id: stack-deploy
         with:
           name: ${{ env.CFN_STACK_NAME }}
@@ -83,7 +83,7 @@ jobs:
           # Pass the dynamic ECR Image URI to the CloudFormation template
           parameter-overrides: |
             EcrImageUri=${{ needs.build.outputs.ecr_image_uri }}
-          capabilities: CAPABILITY_NAMED_IAM 
+          capabilities: CAPABILITY_NAMED_IAM
 
     outputs:
       # Extract the live ServiceUrl from CloudFormation outputs for the ZAP scan
