@@ -5,7 +5,7 @@ const app = express();
 
 // Use the environment variable PORT provided by App Runner, or default to 8080.
 // NOTE: 8080 must match the port exposed in your Dockerfile and configured in the CloudFormation template.
-const PORT = process.env.PORT || 8080; 
+const PORT = process.env.PORT || 8080;
 
 // ----------------------------------------------------------------------
 // 1. HEALTH CHECK (CRITICAL for App Runner Stabilization)
