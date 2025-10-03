@@ -2,15 +2,23 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: AWS App Runner Service for DevSecOps Project with ECR, IAM, and CloudWatch Alarms
 
 Parameters:
-  # RESTORED: This Parameter is essential. It receives the ECR Image URI 
+  # This Parameter is essential. It receives the ECR Image URI 
   # dynamically from the GitHub Actions build job output.
   EcrImageUri:
     Type: String
     Description: URI of the ECR image pushed by the build stage (e.g., <account_id>.dkr.ecr.<region>.amazonaws.com/repo-name:tag)
 
 Resources:
+  # 0. ECR Repository (NEW RESOURCE ADDED: Fixes the 'name unknown' error)
+  AppRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: devsecops-zap-app-repo # MUST match the pipeline's expectation
+      ImageScanningConfiguration:
+        scanOnPush: true
+
   # 1. IAM Role for App Runner to pull images from ECR
-  # NOTE: The Service Principal must be 'build.apprunner.amazonaws.com' for image deployment.
+  # NOTE: The Service Principal must be 'build.apprunner.amazonaws.com' for deployment access.
   AppRunnerAccessRole:
     Type: AWS::IAM::Role
     Properties:
@@ -19,7 +27,6 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              # CRITICAL FIX: Use the Build service principal for deployment access
               Service: [ 'build.apprunner.amazonaws.com' ] 
             Action:
               - sts:AssumeRole
@@ -27,27 +34,26 @@ Resources:
         # Standard AWS policy for ECR access
         - arn:aws:iam::aws:policy/service-role/AWSAppRunnerServicePolicyForECR
       Path: /
-      RoleName: devsecops-AppRunnerAccessRole # Maintain a consistent, named role
+      RoleName: devsecops-AppRunnerAccessRole
 
   # 2. AWS App Runner Service 
   AppRunnerService:
     Type: AWS::AppRunner::Service
     Properties:
-      ServiceName: devsecops-zap-app # Changed to match the previous service name
-      # ADDED: Trivial Description to ensure the stack is always updatable.
+      ServiceName: devsecops-zap-app 
+      # Added Description to ensure the stack is always updatable on subsequent runs.
       Description: Latest deployment for DevSecOps pipeline
       SourceConfiguration:
         ImageRepository:
-          # CRITICAL FIX: Use the Parameter passed by the GitHub Action
+          # Uses the Parameter passed by the GitHub Action
           ImageIdentifier: !Ref EcrImageUri 
           ImageRepositoryType: ECR 
           ImageConfiguration:
             Port: '8080' 
-            # RESTORED: Environment variables
             RuntimeEnvironmentVariables:
               NODE_ENV: production
         AuthenticationConfiguration:
-          # CRITICAL FIX: Use the IAM Role defined above
+          # Uses the IAM Role defined above
           AccessRoleArn: !GetAtt AppRunnerAccessRole.Arn
       
       InstanceConfiguration:
@@ -62,7 +68,6 @@ Resources:
         HealthyThreshold: 1
         UnhealthyThreshold: 5
         
-      # Observability is set to true to ensure logs are captured
       ObservabilityConfiguration:
         ObservabilityEnabled: true 
 
